@@ -14,6 +14,8 @@ public class VideoStream {
 
         //init variables
         fis = new FileInputStream(filename);
+//        System.out.println("total length: " + fis.available());
+
         frame_nb = 0;
     }
 
@@ -33,6 +35,7 @@ public class VideoStream {
         //transform frame_length to integer
         length_string = new String(frame_length);
         length = Integer.parseInt(length_string);
+//        System.out.println("length: " + length);
 
         return(fis.read(frame,0,length));
     }

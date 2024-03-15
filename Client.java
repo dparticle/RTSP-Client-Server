@@ -81,6 +81,9 @@ public class Client {
     int statHighSeqNb;          //Highest sequence number received in session
 
     FrameSynchronizer fsynch;
+
+    HashMap<Integer,HashMap<Integer,byte[]>> tileBuffer = new HashMap<>();
+    int PKT_SIZE = 1400;
    
     //--------------------------
     //Constructor
@@ -137,7 +140,8 @@ public class Client {
 
         //init timer
         //--------------------------
-        timer = new Timer(20, new timerListener());
+//        timer = new Timer(20, new timerListener());
+        timer = new Timer(5, new timerListener());  //TODO: 这个设置大导致读取超时，是否可以用这个模拟丢包，感觉不行，他会一直超时；ICDCS 中是 while true 读取 rtp
         timer.setInitialDelay(0);
         timer.setCoalesce(true);
 
@@ -145,7 +149,7 @@ public class Client {
         rtcpSender = new RtcpSender(400);
 
         //allocate enough memory for the buffer used to receive data from the server
-        buf = new byte[15000];    
+        buf = new byte[15000];
 
         //create the frame synchronizer
         fsynch = new FrameSynchronizer(100);
@@ -369,48 +373,111 @@ public class Client {
                 RTPsocket.receive(rcvdp);
 
                 double curTime = System.currentTimeMillis();
-                statTotalPlayTime += curTime - statStartTime; 
-                statStartTime = curTime;
+//                statTotalPlayTime += curTime - statStartTime;
+//                statStartTime = curTime;
 
                 //create an RTPpacket object from the DP
                 RTPpacket rtp_packet = new RTPpacket(rcvdp.getData(), rcvdp.getLength());
                 int seqNb = rtp_packet.getsequencenumber();
 
-                //this is the highest seq num received
+                //get the information of the packet
+                int frameLength = rtp_packet.getframelength();
+                int videoID = rtp_packet.getframeid();
 
-                //print important header fields of the RTP packet received: 
-                System.out.println("Got RTP packet with SeqNum # " + seqNb
-                                   + " TimeStamp " + rtp_packet.gettimestamp() + " ms, of type "
-                                   + rtp_packet.getpayloadtype());
-
-                //print header bitstream:
-                rtp_packet.printheader();
-
-                //get the payload bitstream from the RTPpacket object
                 int payload_length = rtp_packet.getpayload_length();
-                byte [] payload = new byte[payload_length];
+                byte[] payload = new byte[payload_length];
                 rtp_packet.getpayload(payload);
 
-                //compute stats and update the label in GUI
-                statExpRtpNb++;
-                if (seqNb > statHighSeqNb) {
-                    statHighSeqNb = seqNb;
-                }
-                if (statExpRtpNb != seqNb) {
-                    statCumLost++;
-                }
-                statDataRate = statTotalPlayTime == 0 ? 0 : (statTotalBytes / (statTotalPlayTime / 1000.0));
-                statFractionLost = (float)statCumLost / statHighSeqNb;
-                statTotalBytes += payload_length;
-                updateStatsLabel();
+                int pktId = rtp_packet.getpktid();
+                int endPkt = rtp_packet.getendofpkt();
+                HashMap<Integer, byte[]> buffer = null;
 
-                //get an Image object from the payload bitstream
-                Toolkit toolkit = Toolkit.getDefaultToolkit();
-                fsynch.addFrame(toolkit.createImage(payload, 0, payload_length), seqNb);
+                if (!tileBuffer.containsKey(videoID)) {
+                    buffer = new HashMap<>();
+                } else {
+                    buffer = tileBuffer.get(videoID);
+                }
+                //whether the current packet of the tile has been received
+                if (!buffer.containsKey(pktId)) {
+                    buffer.put(pktId, payload);
+                    tileBuffer.put(videoID, buffer);
 
-                //display the image as an ImageIcon object
-                icon = new ImageIcon(fsynch.nextFrame());
-                iconLabel.setIcon(icon);
+                    //detect whether a tile is ready
+                    if ((buffer.size() - 1) * PKT_SIZE <= frameLength && buffer.size() * PKT_SIZE >= frameLength) {
+                        statTotalPlayTime += curTime - statStartTime;
+                        statStartTime = curTime;
+
+                        //System.out.println("Successfully recv tile: " + videoID);
+                        byte[] frame = new byte[frameLength];
+                        for (Integer tempId : buffer.keySet()) {
+                            byte[] pktBits = buffer.get(tempId);
+                            System.arraycopy(pktBits, 0, frame, tempId * PKT_SIZE, pktBits.length);
+                        }
+                        tileBuffer.remove(videoID);
+
+                        //print important header fields of the RTP packet received:
+                        System.out.println("Got RTP packet with SeqNum # " + seqNb
+                                + " TimeStamp " + rtp_packet.gettimestamp() + " ms, of type "
+                                + rtp_packet.getpayloadtype());
+
+                        //compute stats and update the label in GUI
+                        statExpRtpNb++;
+                        if (seqNb > statHighSeqNb) {
+                            statHighSeqNb = seqNb;
+                        }
+                        if (statExpRtpNb != seqNb) {
+                            statCumLost++;
+                        }
+                        statDataRate = statTotalPlayTime == 0 ? 0 : (statTotalBytes / (statTotalPlayTime / 1000.0));
+                        statFractionLost = (float)statCumLost / statHighSeqNb;
+                        statTotalBytes += frameLength;
+                        updateStatsLabel();
+
+                        //get an Image object from the payload bitstream
+                        Toolkit toolkit = Toolkit.getDefaultToolkit();
+                        fsynch.addFrame(toolkit.createImage(frame, 0, frameLength), seqNb);
+
+                        //display the image as an ImageIcon object
+                        icon = new ImageIcon(fsynch.nextFrame());
+                        iconLabel.setIcon(icon);
+                    }
+                }
+
+//                //this is the highest seq num received
+//
+//                //print important header fields of the RTP packet received:
+//                System.out.println("Got RTP packet with SeqNum # " + seqNb
+//                                   + " TimeStamp " + rtp_packet.gettimestamp() + " ms, of type "
+//                                   + rtp_packet.getpayloadtype());
+//
+//                //print header bitstream:
+//                rtp_packet.printheader();
+//
+//                //get the payload bitstream from the RTPpacket object
+//                int payload_length = rtp_packet.getpayload_length();
+//                byte [] payload = new byte[payload_length];
+//                rtp_packet.getpayload(payload);
+//
+//                //compute stats and update the label in GUI
+//                statExpRtpNb++;
+//                if (seqNb > statHighSeqNb) {
+//                    statHighSeqNb = seqNb;
+//                }
+//                if (statExpRtpNb != seqNb) {
+//                    statCumLost++;
+//                }
+//                statDataRate = statTotalPlayTime == 0 ? 0 : (statTotalBytes / (statTotalPlayTime / 1000.0));
+//                statFractionLost = (float)statCumLost / statHighSeqNb;
+//                statTotalBytes += payload_length;
+//                updateStatsLabel();
+//
+//                //get an Image object from the payload bitstream
+//                Toolkit toolkit = Toolkit.getDefaultToolkit();
+//                fsynch.addFrame(toolkit.createImage(payload, 0, payload_length), seqNb);
+//
+//                //display the image as an ImageIcon object
+//                icon = new ImageIcon(fsynch.nextFrame());
+//                iconLabel.setIcon(icon);
             }
             catch (InterruptedIOException iioe) {
                 System.out.println("Nothing to read");

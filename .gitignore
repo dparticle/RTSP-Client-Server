@@ -1,2 +1,6 @@
 *.class
 !FunkyServer.class
+.idea
+*.iml
+out
+gen
